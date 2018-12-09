@@ -1,0 +1,301 @@
+---
+title: "MidProject"
+author: "Jiahao Xu"
+pdf_document:
+  latex_engine: xelatex
+output:
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(readxl)
+library(data.table)
+library(tidyverse)
+library(arm)
+library(lme4)
+library(pROC)
+library(corrplot)
+library(RColorBrewer)
+library(caTools)
+library(Metrics)
+library(caret)
+library(car)
+library(betareg)
+library(emmeans)
+```
+#1.Abstract
+In this project, I will analyze how 3 Point Field Goals Attempted and 3 Point Field Goals Percentage will improve Win Rate for each NBA Team, and whether more 3 Point Field Goals Attempted and higher 3 points percentage will increase/decrease the win share for each NBA player in different positions.
+
+#2.Introduction
+#2.1 Background
+ In 2014–15, Curry won the NBA Most Valuable Player Award and led the Warriors to their first championship since 1975. The following season, he became the first player in NBA history to be elected MVP by a unanimous vote and to lead the league in scoring while shooting above 50–40–90. That same year, the Warriors broke the record for the most wins in an NBA season. We could not imagine how crazy Golden State Warriors and Curry's three-pointer were. Curry nailed more 3s than everyone on the Bucks combined in 2016. Since the traditional basketball philosophy is that the closer you get to the basket, the easier it is to score, Curry and his Golden State Warriors definitely created a new era that NBA teams began to shot more and more 3-points instead of midrange Medium and long range 2-points jump shot. 
+ 
+
+```{r out.width = "80%", fig.align = "left", echo=FALSE , message=FALSE, warning=FALSE}
+knitr::include_graphics("curry2.npg")
+
+```
+
+#2.2 Previous work
+According to Stephen Shea, each season, NBA teams are taking more 3s and there are no signs that the trend is leveling off. If anything, it’s taking off. Why are teams taking so many threes? The three provides value in two ways. First, it’s an efficient shot. Over the last 20 years, NBA players have averaged 1.05 points per above-the-break 3 and 1.16 points per corner 3. In contrast, players have averaged just 0.79 points per 2-point attempt outside of the restricted area. In other words, 100 mid-range jumpers will provide 79 points on average, while 100 above-the-break 3s would provide 105.In 2014-15, NBA teams, for the first time, were more likely to shoot a 3 than a mid-range jump shot. Today, 1 in 3 FGA is a 3PA.
+```{r out.width = "80%", fig.align = "left", echo=FALSE , message=FALSE, warning=FALSE}
+knitr::include_graphics("3point.npg")
+knitr::include_graphics("3point_revolution_4.npg")
+
+```
+#3.1 Data source
+"player_data.csv" and "Players.csv" are players' season data kaggle, which was scraped from Basketball Reference. For EDA and model analysis, I only select 5 seasons' Team and Player data, since 2o14-2015 season was the first season that players in NBA were more likely to shoot a 3 than a mid-range jump shot.
+```{r,echo=FALSE , message=FALSE, warning=FALSE}
+# read the data
+player_data1<- read.csv("player_data.csv",sep=",") # data from kaggle
+colnames(player_data1)[1] <- "Player"
+player_data2<- read.csv("Players.csv",sep=",")  # data from kaggle
+player_data<-inner_join(player_data2,player_data1,by="Player")%>%dplyr:: select(Player,born,college,birth_city,birth_state,year_start,year_end,position,height.y,weight.y,birth_date)
+colnames(player_data)[9]<-"height"
+colnames(player_data)[10]<-"weight"
+Seasons_Stats<-read.csv("Seasons_Stats.csv",sep=",") # data from kaggle
+
+EDA_data<-inner_join(player_data,Seasons_Stats,by="Player")
+
+# Notation for some basketball terms: TM=Team, MP=Minutes Played, PER=Player Efficiency Rating, TS.=True Shooting %, OWS=Offensive Win Shares, DWS=Defensive Win Shares, WS=Win Share, FG=Field Goals, FGA=Field Goal Attempts, FG.=Field Goal Percentage, X3P=3-Point Field Goals, X3PA=3-Point Field Goal Attempts, X3P.=3-Point Field Goal Percentage, X2P=2-Point Field Goals, X2PA=2-Point Field Goal Attempts, X2P.=2-Point Field Goal Percentage, eFG.=Effective Field Goal Percentage
+EDA_data_Player_2014_2018<-EDA_data%>%dplyr::select(Player,college,birth_date,Year,position,height,weight,Age,Tm,MP,PER,TS.,OWS,DWS,WS,FG,FGA,FG.,X3P,X3PA,X3P.,X2P,X2PA,X2P.,eFG.,TRB)%>%dplyr::filter(Year<2019 & Year>2013)
+
+EDA_data_Team_2014_2018<-read.csv("NBATeamStats.csv",sep=",")%>% mutate(WinRate=WIN.*100)%>%mutate(X2PA=FGA-X3PA) # data from NBA official website
+colnames(EDA_data_Team_2014_2018)[11] <- "X3PM"
+colnames(EDA_data_Team_2014_2018)[27] <- "RPM"
+
+```
+
+#3.2 Exploratory Data Analysis (EDA)
+PS: Figure 1-9 are all from Team's perspective, Figure 10 is from  Player's perspective.
+
+```{r, echo=FALSE}
+ggplot(EDA_data_Team_2014_2018, aes(X3PA, fill = TEAM)) + 
+  geom_histogram(binwidth = 5) + theme_light() +   
+ xlab("number of 3 points attemped per game") + 
+  ylab("Frequency of NBA Teams in 5 seasons ")+ 
+  ggtitle("Figure 1. 3 points attemped Distribution") + 
+  theme(axis.title.x = element_text(face="bold",  size=10), 
+        axis.title.y = element_text(face="bold",  size=12),
+        plot.title = element_text(size=14, face="bold"),  
+        axis.text.x  = element_text(vjust=0.5, size=10)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+From figure 1, we can see that the data sample of 3 points attemped per game of NBA Teams in last 5 seasons is approximately normally distrubuted. The mean value is about 25 3-points attemped per game. And Goldent State Warriors did not unexpectedly shot the most three points, more than 40 3-points attemped per game.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot() + geom_smooth(data = EDA_data_Team_2014_2018, aes(x = Year, y = X3PA, color = "3 Point Field Goals Attemped"), size=1.5,se=FALSE) + geom_smooth(data = EDA_data_Team_2014_2018, aes(x = Year, y = X2PA, color = "2 Point Field Goals Attemped",se=FALSE),size=1.5) +facet_wrap(~TEAM, nrow = 6)+theme_classic()+xlab("Year")+ylab("Field Goals Attemped")+ 
+  ggtitle("Figure 2. Trend of 3-point and 2-point shot") + 
+  theme(axis.title.x = element_text(face="bold",  size=10), 
+        axis.title.y = element_text(face="bold",  size=12),
+        plot.title = element_text(size=14, face="bold"),  
+        axis.text.x  = element_text(vjust=0.5, size=10)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+Figure 2 is a facet plot by Team to show the trend of 3 Point Field Goals Attemped and 2 Point Field Goals Attemped. From the plot, generally most NBA Team have slight decrease or keep the same in 2 point Field Goals Attemped. Only Cleveland Cavaliers and LA Clippers had obvious increase in in 2 point Field Goals Attemped. And it is obvious that most Team have increase in 3 Point Field Goals Attemped, especially Houston Rocket and Milwaukee Bucks. It is unbelievable that Houson Rocket had the same 2 point Field Goals Attemped and 3 point Field Goals Attemped last season!
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot(EDA_data_Team_2014_2018, aes(y=X3PM, x=Year)) +geom_bar(stat = "identity", position = "dodge")+facet_wrap(~TEAM, nrow = 6)+ggtitle("3 Point Field Goals Made change by year")+theme(plot.title = element_text(hjust = 0.5)) +   ggtitle("Figure 3. 3-Point Field Goals Made change by year")+
+  theme(axis.title.x = element_text(face="bold",  size=12), axis.title.y = element_text(face="bold",  size=12),plot.title = element_text(size=14, face="bold")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle=15))
+
+ggplot(EDA_data_Team_2014_2018, aes(y=X3P., x=Year)) +geom_bar(stat = "identity", position = "dodge")+facet_wrap(~TEAM, nrow = 6)+ggtitle("Field Goal Percentage change by year")+theme(plot.title = element_text(hjust = 0.5)) +  ggtitle("Figure 4. 3-Point Field Goal Percentage change by year")+
+  theme(axis.title.x = element_text(face="bold",  size=12), axis.title.y = element_text(face="bold",  size=12),plot.title = element_text(size=14, face="bold")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(axis.text.x = element_text(angle=15))+scale_y_continuous(name="3 Point Field Goals Percentage",labels = c("0%","10%","20%","30%","40%")) 
+
+```
+
+According to Figure3 and Figure4, we can figure out that most team had increase in 3 Point Field Goals Made per game last 5 seasons. Because 3 Point Field Goals Made=3 Point Field Goals Attemped * 3 Point Goals Percentage, most team had increase in 3 Point Field Goals Attemped per game last 5 seasons, and their 3 Point Goals Percentage did not have obvious changes.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot()+geom_smooth(data = EDA_data_Team_2014_2018, aes(x = X3P.,y=WIN.), size=1.5,se=FALSE)+geom_point(data = EDA_data_Team_2014_2018, mapping= aes(x =X3P., y = WIN.,color=TEAM))+scale_x_continuous(name=("3-points Field Goals percentage"),labels =c("0%","33%","36%","39%","42%") )+scale_y_continuous(name="Win Rate",labels =c("0%","25%","50%","75%","100%"))+facet_wrap(~Year, nrow = 2)+ 
+  ggtitle("Figure 5. 3 points Field Goals percentage vs. Win Rate") + 
+  theme(axis.title.x = element_text(face="bold",  size=10), 
+        axis.title.y = element_text(face="bold",  size=12),
+        plot.title = element_text(size=10, face="bold"),  
+        axis.text.x  = element_text(angle=15,vjust=0.5, size=10)) +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+According to Figure 5, a facet plot by year of the relationship between 3 points Field Goals percentage and Win Rate, we can see that basically higher 3-points percentage will lead to higher Win Rate, except this season.Because so far, it only processed like 20-30 games in 2018-2019 season, the trend of this season is not so reliable.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+  ggplot() + geom_line(data = EDA_data_Team_2014_2018, aes(x = Year, y = X3PM/0.3, color = "3 Point Field Goals Made"), size=1.5) + geom_line(data = EDA_data_Team_2014_2018, aes(x = Year, y = WinRate, color = "Win Percentage"),size=1.5) +facet_wrap(~TEAM, nrow = 6)+theme_classic()+xlab("Year")+ylab("Percentage")+scale_y_continuous(name="Win Percentage",labels = c("0%","25%","50%","75%","100%"))+ggtitle("Figure 6. 3-Point Field Goals Made vs Win Percentage") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot() + geom_line(data = EDA_data_Team_2014_2018, aes(x = Year, y = X3PA/0.6, color = "3 Point Field Goals Attempted"), size=1.5) + geom_line(data = EDA_data_Team_2014_2018, aes(x = Year, y = WinRate, color = "Win Percentage"),size=1.5) +facet_wrap(~TEAM, nrow = 6)+theme_classic()+xlab("Year")+ylab("Percentage")+scale_y_continuous(name="Win Percentage",labels = c("0%","25%","50%","75%","100%"))+ggtitle("Figure 7. 3-Point Field Goals Attemped vs Win Percentage") + theme(plot.title = element_text(hjust = 0.5))
+
+
+ggplot()+geom_smooth(data = EDA_data_Team_2014_2018, aes(x = REB,y=WIN.), size=1.5,se=FALSE)+geom_point(data = EDA_data_Team_2014_2018, mapping= aes(x =REB, y = WIN.,color=TEAM))+xlab("Number of Rebound")+scale_y_continuous(name="Win Rate",labels =c("0%","25%","50%","75%","100%"))+ggtitle("Figure 8. 3-Point Total Rebound vs Win Percentage") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+According to figure 6 and figure 7, we can realize that the increasing of both 3-point Field Goals Attempted and Made will have obvious positive/nagetive influences to different teams. figure 8 tells us that the higher rebound, the higher win rate: just like what famous basketball player Takenori Akagi in "Slam Dunk" said, "If you master the rebound, you will master the game".
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot()+geom_smooth(data = EDA_data_Team_2014_2018, aes(x = RPM,y=WinRate), size=1.5,se=FALSE)+geom_point(data = EDA_data_Team_2014_2018, mapping= aes(x =RPM, y = WinRate,color=TEAM))+facet_wrap(~Year, nrow = 2)+xlab("Real Plus/Minus Value")+scale_y_continuous(name="Win Rate",labels =c("0%","25%","50%","75%","100%"))+ggtitle("Figure 9. 3-Point Total Rebound vs Win Percentage") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+According to Figure 9, Real Plus/Minus Value has obvious positive relationship with Win Rate: higher Real Plus/Minus Value leads to higher win rate. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ggplot()+geom_smooth(data = EDA_data_Player_2014_2018, aes(x = X3P,y=WS),size=1.5,se=FALSE)+geom_point(data = EDA_data_Player_2014_2018, mapping= aes(x =X3P, y = WS,color=height))+facet_wrap(~position, nrow = 2)+xlab("3-points Field Goals Made")+scale_y_continuous(name="Win Share")+ggtitle("Figure 10. 3-points Field Goals Made vs Win Share") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+Figure 10 demonstrates the relationship between 3-points Field Goals Mad and Win Share of each player in different height and different position. From the plot, it shows that there is strong positive relationships between 3PM and WS in F-G, G, G-F and F these four positions. In position Center, almost no influences by 3PM.
+
+# 3.3 Correlation Check
+According to this correlation plot, it is obvious that X3PM, X3P., X3PA and RPM have very strong correlations.
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+M <- cor(EDA_data_Team_2014_2018 %>% dplyr::select(X3PM,X3P.,RPM,Year,REB,X3PA))
+
+corrplot(M, type = "upper", order = "hclust",
+         col = brewer.pal(n = 8, name = "RdBu"))
+
+```
+
+#4.1 Model used and interpretation
+
+The first model I build is a basic linear model. The response is the Win Rate of each NBA team in different seasons. Indicators are team, X3PM(3-points Made), X3P.(3-points field goals percentage), ReB(Rebound),RPM(Real Plus/Minus value) and Year. According to the summary of model 1, the standard error for each indicator is low enough. The residual plot looks symmetric. AIC of this model is low. And R square of this model is 0.920095, which is high enough. The Marginal Model Plotting(mmps) shows the response on the vertical axis versus a linear combination u of regressors in the mean function on the horizontal axis. According to the plot, we can see that the reponse is very close to mean value. 
+
+Take my favorite team LA Lakers to interpret this model: 
+Win Rate of LA Lakers in 2018 = 1.57-0.09*X3PM-0.02*X3P.-0.016-0.005*REB+0.03*RPM+0.036+0.0024*X3PM*X3P.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# build the model
+# 1. The basic LM  for teams from year 2014-2018
+model1_team<-lm(WIN.~X3PM+X3P.+TEAM+X3PM*X3P.+REB+RPM+factor(Year),data=EDA_data_Team_2014_2018)
+summary(model1_team)
+plot(model1_team)
+AIC(model1_team)
+summary(model1_team)$adj.r.squared
+mmps(model1_team,sd=TRUE)
+
+
+```
+
+The second model I build is based on Beta regression. Beta regression can be conducted with the betareg function in the betareg package. With this function, the dependent variable varies between 0 and 1, but no observation can equal exactly zero or exactly one, which is the same to NBA Win Rate. The response is the Win Rate of each NBA team in different seasons. Indicators are team, X3PM(3-points Made), X3P.(3-points field goals percentage), ReB(Rebound),RPM(Real Plus/Minus value) and Year. According to the summary of model 2, the standard error for each indicator is low enough. The Pseudo R-squared is 0.9364, which is high enough. The residual binnedplot of this model looks fine. All the points are inside the line. 
+
+Take my favorite team LA Lakers to interpret this model: 
+Win Rate of LA Lakers in 2018 = invlogit(5.47-0.49*X3PM-0.12*X3P.-0.04-0.02*REB+0.14*RPM+0.146+0.013*X3PM*X3P.)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# build the model
+# 2. The basic GLM   for teams from year 2014-2018
+model2_team<-betareg(WIN.~X3PM+X3P.+TEAM+X3P.*X3PM+REB+RPM+factor(Year),data=EDA_data_Team_2014_2018)
+summary(model2_team)
+plot(predict(model2_team), residuals(model2_team), main = "Residual plot", xlab = "Expected Value", ylab = "Residuala")
+binnedplot(predict(model2_team,type="response"), residuals(model2_team,type="response"))
+
+```
+
+The third level I build is a multilevel linear model.I use 30 NBA teams as the group. Based on this model, different team will have different intercept and differt slope of X3PM because I have the most interests in the indicator X3PM and different teams have obvious differences in X3PM. The response is the Win Rate of each NBA team in different seasons. Indicators are team, X3PM(3-points Made), X3P.(3-points field goals percentage), ReB(Rebound),RPM(Real Plus/Minus value) and Year. The residual plot of this model looks fine, but the qqnorm plot looks not that straight.
+
+Take my favorite team LA Lakers to interpret this model: 
+Win Rate of LA Lakers in 2018 = 0.53-0.034-0.003*X3PM-0.004*X3P.+0.011-0.002*REB+0.035*RPM+0.0004*X3PM*RPM.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# build the model
+# 3. The multilevel model for teams from year 2014-2018
+model3_team<-lmer(WIN.~X3PM+X3P.+factor(Year)+REB+RPM+X3PM*RPM+(1+X3PM|TEAM),data=EDA_data_Team_2014_2018)
+summary(model3_team)
+ranef(model3_team)
+plot(model3_team)
+qqnorm(residuals(model3_team))
+
+
+```
+
+The fourth level I build is also a multilevel linear model, but in Players' perspective.I use 7 NBA positions as the group. Based on this model, different positions will have different intercepts and differt slopes of X3PM, because I have the most interests in the indicator X3PM and different positions have obvious differences in X3PM. The response is the Win Share of each NBA player in different season. Indicators are X3P(3-points Made), X3P.(3-points field goals percentage), TRB(Total Rebound), DWS(Denfensive Win Share) and Year. Both the residual and qqnorm plot of this model looks not fine.
+Not a very good model.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# build the model
+# 4. The multilevel model for players from year 2014-2018
+model4_player<-lmer(WS~X3P+X3P.+X3P*X3P.+factor(Year)+TRB+DWS+(1+X3P|position),data=EDA_data_Player_2014_2018)  #random effects for positions and (+) X3P by (|) position, which are allowed to vary independently from eachother (the 1 and 0 notation)
+summary(model4_player) #summarizes the results of the model - somehow in the "knitting process" significance stars have been lost - R code suggests a significant effect of X3P(3-Point Field Goal Percentage).
+ranef(model4_player) #examines the random effects (i.e things that are allowed to vary across units, in this case each representing the position effect of X3P(3-Point Field Goals) for 7 seven positions in NBA: C, C-F, F, F-C, F-G, G and G-F)
+plot(model4_player)
+qqnorm(residuals(model4_player))
+```
+
+#4.2 Model Choice 
+Using anova test for lm(model1), beta(model2) and mutilevel lm(model3) to test which one is the best. Since model2 follows beta regression, it will not be covered by the anova test. Both AIC and deviance of model1 and model3 are small enough. And the p value between model1 and model3 is not significant. It means that model1 do not have significant improvement than model3. All in all, I will choose model3_Team and model2_Team as my favorite models. Because model2_Team follows the most suitable beta distribution, and model3_Team has multiple groups by different teams, which satisify my conclusion the most. In the 5.2 Limitation part, I mention that not every team should shot more 3 points field goals.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+#Choose the model for TEAM 
+anova(model3_team,model2_team,model1_team )
+
+```
+
+#4.3 Model checking
+The result here shows the Absolute Mean Error(MAE) of first 3 models for team. We can see that the MAE of these three models are all 0.03. For my response, Win Rate, it is 3% error in winning percentage. In my perspective, this kind of error is acceptable. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+sample=sample.split(EDA_data_Team_2014_2018,SplitRatio = 0.8)
+train1=subset(EDA_data_Team_2014_2018,sample=TRUE)
+test1=subset(EDA_data_Team_2014_2018,sample=FALSE)
+
+sample2=sample.split(EDA_data_Player_2014_2018,SplitRatio = 0.8)
+train2=subset(EDA_data_Player_2014_2018,sample=TRUE)
+test2=subset(EDA_data_Player_2014_2018,sample=FALSE)
+
+model4_check<-model4_player<-lmer(WS~X3P+X3P.+X3P*X3P.+factor(Year)+TRB+DWS+(1+X3P|position),data=train2) 
+model3_check<-lmer(WIN.~X3PM+X3P.+factor(Year)+X3PM*X3P.+REB+RPM+(1|TEAM)+(0+X3PM|TEAM),data=train1)
+model2_check<-betareg(WIN.~X3PM+X3P.+TEAM+X3P.*X3PM+REB+RPM+factor(Year),data=train1)
+model1_check<-lm(WIN.~X3PM+X3P.+TEAM+X3PM*X3P.+REB+RPM+factor(Year),data=train1)
+
+
+pred1<-predict(model1_check,test1,type="response")
+pred2<-predict(model2_check,test1,type="response")
+pred3<-predict(model3_check,test1,type="response")
+pred4<-predict(model4_check,test2,type="response")
+
+R1<-rmse(pred1,EDA_data_Team_2014_2018$WIN.)
+M1<-MAE(pred1,EDA_data_Team_2014_2018$WIN.)
+R2<-rmse(pred2,EDA_data_Team_2014_2018$WIN.)
+M2<-MAE(pred2,EDA_data_Team_2014_2018$WIN.)
+R3<-rmse(pred3,EDA_data_Team_2014_2018$WIN.)
+M3<-MAE(pred3,EDA_data_Team_2014_2018$WIN.)
+R4<-rmse(pred4,EDA_data_Player_2014_2018$WS)
+M4<-MAE(pred4,EDA_data_Player_2014_2018$WS)
+
+result<-c(M1,M2,M3)
+result
+```
+
+#5.Discussion   
+#5.1 Implication 
+According to all the EDA and model above, we can conclude that, in this NBA era, small ball tactics(shoting more 3-point field goals and increasing the number of offensive rounds, since 3-points shot is the quickest attack choice) are becoming more popular and easier to win.
+
+#5.2 Limitation 
+The small ball tactic is only valid and applicable for those teams who have excellent 3 point shooter, like Stephen Curry and Clay Thompson, and spatial frontcourt players, like Anthony Downs and Kevin Love. Teams like LA Clippers and San Antonio Spurs are more suitable for inside attacks. Spurs Coach Popovich is a very traditional coach who always believes that defense and inside attack are the best way to win the game. 
+
+#5.3 Future direction
+The small ball era will not end until someone like Shaq O'Neill rule the pain again!
+ 
+#6. reference:
+https://www.youtube.com/watch?v=GEMVGHoenXM
+https://www.mysanantonio.com/sports/nba/article/Stephen-Curry-hits-unreal-shot-to-take-Thunder-6858823.php
+https://shottracker.com/articles/the-3-point-revolution
+http://www.espn.com/espn/feature/story/_/id/15492948/the-numbers-steph-curry-incredible-mvp-season
+http://rcompanion.org/handbook/J_02.html
+
+#7. Appendix
+
+```{r}
+# joint_test for model2_team
+joint_tests(model2_team)
+
+```
